@@ -25,6 +25,13 @@
     .kpi .big{font-weight:700;font-size:18px}
     .footer{margin-top:20px;font-size:12px;color:var(--muted)}
     @media (max-width:920px){.grid{grid-template-columns:1fr;}}
+    .charts {
+  height: 300px;         /* fixed height for chart card */
+  overflow-y: auto;       /* chart stays fixed; inner scroll if needed */
+}
+canvas {
+  height: 260px !important;   /* chart fixed height */
+}
   </style>
   <!-- Chart.js from CDN (interactive charts) -->
   <script src="https://cdn.jsdelivr.net/npm/chart.js"></script>
@@ -66,11 +73,6 @@
         <div class="card" style="margin-top:12px">
           <h3 style="margin:0 0 8px 0">Top 10 Most Expensive</h3>
           <div id="topExpensive"></div>
-        </div>
-
-        <div class="card" style="margin-top:12px">
-          <h3 style="margin:0 0 8px 0">Top 10 Value-for-Money</h3>
-          <div id="topVfm"></div>
         </div>
       </div>
 
@@ -146,7 +148,7 @@ fetch(DATA_URL).then(r => {
     });
     // try to detect common column variations:
     const player = norm['Player'] || norm['player'] || norm['Name'] || norm[' PLAYER'] || '';
-    const basePrice = toNum(norm['Base Price'] || norm['Base_Price'] || norm['BasePrice'] || norm['BASE PRICE']);
+    const basePriceRaw = norm['Base Price'] || norm['Base_Price'] || norm['BasePrice'] || norm['BASE PRICE'] || '';
     const soldCr = toNum(norm['COST IN ₹ (CR.)'] || norm['COST IN ₹ (CR.)'] || norm['COST IN ₹ (CR)'] || norm['Cost IN ₹ (CR.)'] || norm['COST IN ₹ (CR.)'] || norm['Cost IN ₹ (CR)'] || norm['COST IN ₹ (CR)']);
     const soldUSD = toNum(norm['Cost IN $ (000)'] || norm['Cost IN $ (000)'] || norm['Cost IN $']);
     const type = norm['TYPE'] || norm['Type'] || norm['type'] || '';
@@ -155,7 +157,7 @@ fetch(DATA_URL).then(r => {
     return {
       raw: norm,
       Player: player,
-      Base_Price: isNaN(basePrice) ? null : basePrice,
+      Base_Price: basePriceRaw,   // keep as text
       Sold_Price_Cr: isNaN(soldCr) ? null : soldCr,
       Sold_Price_USD: isNaN(soldUSD) ? null : soldUSD,
       Type: type,
@@ -238,7 +240,7 @@ function showPlayer(row) {
       <tr><th>Team</th><td>${escapeHtml(row.Team)}</td></tr>
       <tr><th>Type</th><td>${escapeHtml(row.Type)}</td></tr>
       <tr><th>Prev Squad (2021)</th><td>${escapeHtml(row.Prev_Squad)}</td></tr>
-      <tr><th>Base Price</th><td>${row.Base_Price!==null?row.Base_Price+' Cr' : '—'}</td></tr>
+      <tr><th>Base Price</th><td>${row.Base_Price || '—'}</td></tr>
       <tr><th>Sold Price</th><td>${row.Sold_Price_Cr!==null?row.Sold_Price_Cr+' Cr' : '—'}</td></tr>
       <tr><th>Sold Price (USD 000)</th><td>${row.Sold_Price_USD!==null?row.Sold_Price_USD : '—'}</td></tr>
     </table>
@@ -261,25 +263,6 @@ function renderTopLists(){
   });
   expTable.appendChild(expBody);
   document.getElementById('topExpensive').innerHTML = ''; document.getElementById('topExpensive').appendChild(expTable);
-
-  // value-for-money (simple metric: performance not available -> use Sold/Base ratio; lower is better)
-  const vfmList = data.map(d => {
-    const base = (typeof d.Base_Price === 'number' && d.Base_Price>0) ? d.Base_Price : 0.001;
-    const sold = (typeof d.Sold_Price_Cr === 'number') ? d.Sold_Price_Cr : Infinity;
-    const vfm = sold / base;
-    return {...d, vfm};
-  }).filter(d => isFinite(d.vfm)).sort((a,b)=>a.vfm - b.vfm).slice(0,10);
-
-  const vfmTable = document.createElement('table');
-  vfmTable.innerHTML = '<thead><tr><th>Player</th><th>Team</th><th>Base (Cr)</th><th>Sold (Cr)</th><th>VfM (Sold/Base)</th></tr></thead>';
-  const vfmBody = document.createElement('tbody');
-  vfmList.forEach(r => {
-    const tr = document.createElement('tr');
-    tr.innerHTML = `<td>${escapeHtml(r.Player)}</td><td>${escapeHtml(r.Team)}</td><td>${r.Base_Price!==null?r.Base_Price.toFixed(2):'—'}</td><td>${r.Sold_Price_Cr!==null?r.Sold_Price_Cr.toFixed(2):'—'}</td><td>${r.vfm!==null?r.vfm.toFixed(2):'—'}</td>`;
-    vfmBody.appendChild(tr);
-  });
-  vfmTable.appendChild(vfmBody);
-  document.getElementById('topVfm').innerHTML = ''; document.getElementById('topVfm').appendChild(vfmTable);
 }
 
 // update charts and tables based on team filter
@@ -365,3 +348,4 @@ function escapeHtml(s){ if(s===null || s===undefined) return ''; return String(s
 </script>
 </body>
 </html>
+
