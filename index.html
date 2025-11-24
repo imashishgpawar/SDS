@@ -1,0 +1,367 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8" />
+  <title>IPL 2022 Auction Analytics</title>
+  <meta name="viewport" content="width=device-width,initial-scale=1" />
+  <style>
+    :root{--accent:#0b6cf3;--muted:#666;--bg:#f7f9fc}
+    body{font-family:Inter,Segoe UI,Roboto,Arial; margin:0; background:var(--bg); color:#111}
+    .container{max-width:1100px;margin:24px auto;padding:20px;background:#fff;border-radius:10px;box-shadow:0 6px 22px rgba(12,23,42,.08)}
+    header{display:flex;align-items:center;gap:16px}
+    header h1{margin:0;font-size:20px}
+    .controls{display:flex;gap:12px;margin-top:14px;flex-wrap:wrap}
+    select,input{padding:8px 10px;border:1px solid #ddd;border-radius:6px;background:#fff}
+    .grid{display:grid;grid-template-columns:1fr 420px;gap:18px;margin-top:18px; align-items:flex-start;}
+    .card{background:#fff;padding:14px;border-radius:8px;border:1px solid #efefef}
+    table{width:100%;border-collapse:collapse;font-size:13px}
+    th,td{padding:6px 8px;border-bottom:1px solid #f0f0f0}
+    th{background:#fafafa;text-align:left}
+    .small{font-size:12px;color:var(--muted)}
+    .charts{display:flex;flex-direction:column;gap:12px}
+    canvas{background:#fff;border-radius:6px;padding:8px}
+    .row{display:flex;gap:12px;align-items:center}
+    .kpi{display:flex;gap:10px;align-items:center}
+    .kpi .big{font-weight:700;font-size:18px}
+    .footer{margin-top:20px;font-size:12px;color:var(--muted)}
+    @media (max-width:920px){.grid{grid-template-columns:1fr;}}
+  </style>
+  <!-- Chart.js from CDN (interactive charts) -->
+  <script src="https://cdn.jsdelivr.net/npm/chart.js"></script>
+</head>
+<body>
+  <div class="container">
+    <header>
+      <div style="width:46px;height:46px;border-radius:8px;background:linear-gradient(135deg,var(--accent),#4ea8ff);display:flex;align-items:center;justify-content:center;color:#fff;font-weight:700">IPL</div>
+      <div>
+        <h1>IPL 2022 Auction Analytics</h1>
+        <div class="small">Single-file demo: load CSV, browse players, and view charts</div>
+      </div>
+    </header>
+
+    <div class="controls">
+      <div class="row">
+        <label class="small" style="margin-right:8px">Team</label>
+        <select id="teamSelect"><option value="__all__">All Teams</option></select>
+      </div>
+      <div class="row">
+        <label class="small" style="margin-right:8px">Player</label>
+        <select id="playerSelect"><option value="">-- choose player --</option></select>
+      </div>
+
+      <div style="margin-left:auto" class="kpi">
+        <div class="card" style="padding:10px 12px"><div class="small">Players</div><div id="kPlayers" class="big">—</div></div>
+        <div class="card" style="padding:10px 12px"><div class="small">Avg Price (₹ Cr)</div><div id="kAvg" class="big">—</div></div>
+        <div class="card" style="padding:10px 12px"><div class="small">Total Spent (₹ Cr)</div><div id="kTotal" class="big">—</div></div>
+      </div>
+    </div>
+
+    <div class="grid">
+      <div>
+        <div class="card">
+          <h3 style="margin:0 0 8px 0">Player Details</h3>
+          <div id="playerDetails" class="small">Select a player to see details.</div>
+        </div>
+
+        <div class="card" style="margin-top:12px">
+          <h3 style="margin:0 0 8px 0">Top 10 Most Expensive</h3>
+          <div id="topExpensive"></div>
+        </div>
+
+        <div class="card" style="margin-top:12px">
+          <h3 style="margin:0 0 8px 0">Top 10 Value-for-Money</h3>
+          <div id="topVfm"></div>
+        </div>
+      </div>
+
+      <div>
+        <div class="card charts">
+          <h3 style="margin:0 0 8px 0">Team Spending (₹ Cr)</h3>
+          <canvas id="teamChart" height="220"></canvas>
+        </div>
+
+        <div class="card charts">
+          <h3 style="margin:0 0 8px 0">Sold Price Distribution</h3>
+          <canvas id="histCanvas" height="220"></canvas>
+        </div>
+      </div>
+    </div>
+
+    <div class="footer">
+      <div>Data source path used by this page: <code id="dataPath"></code></div>
+      <div style="margin-top:6px">Note: if the CSV is not accessible, make sure your environment serves the path <code>/mnt/data/ipl_2022_dataset.csv</code> over HTTP or adjust the <code>DATA_URL</code> variable inside the HTML to point to the served CSV URL.</div>
+    </div>
+  </div>
+
+<script>
+/*
+ Single-file IPL Auction site
+ - Expects CSV at DATA_URL (local path you provided)
+ - Simple CSV parser (handles no embedded commas/quotes)
+ - Builds dropdowns and charts
+*/
+
+// <-- SET DATA PATH HERE (exact local path you uploaded)
+const DATA_URL = 'ipl_2022_dataset.csv';
+document.getElementById('dataPath').innerText = DATA_URL;
+
+// Small CSV parser for well-formed CSVs (no multiline fields)
+function parseCSV(text) {
+  const lines = text.trim().split(/\r?\n/);
+  if(lines.length === 0) return [];
+  const header = lines[0].split(/\s*,\s*/).map(h => h.replace(/(^"|"$)/g,'').trim());
+  const rows = lines.slice(1).map(line => {
+    // simple split on comma, also trim quotes and spaces
+    const parts = line.split(/\s*,\s*/).map(p => p.replace(/(^"|"$)/g,'').trim());
+    const obj = {};
+    header.forEach((h,i) => obj[h] = parts[i] === undefined ? '' : parts[i]);
+    return obj;
+  });
+  return {header, rows};
+}
+
+// Utility: convert value to number if possible
+function toNum(v) {
+  if(v === null || v === undefined || v === '') return NaN;
+  // Remove currency symbols and commas
+  v = String(v).replace(/[₹,$]/g,'').replace(/,/g,'').trim();
+  // also handle "CR." suffix like "1.5" already in crores
+  const n = Number(v);
+  return isNaN(n) ? NaN : n;
+}
+
+// Fetch and load CSV
+fetch(DATA_URL).then(r => {
+  if(!r.ok) throw new Error('Unable to fetch CSV: ' + r.status);
+  return r.text();
+}).then(text => {
+  // parse
+  const parsed = parseCSV(text);
+  window.iplData = parsed.rows.map(r => {
+    // normalize keys (trim and replace spaces)
+    const norm = {};
+    Object.keys(r).forEach(k => {
+      const nk = k.trim().replace(/\s+/g,' ');
+      norm[nk] = r[k];
+    });
+    // try to detect common column variations:
+    const player = norm['Player'] || norm['player'] || norm['Name'] || norm[' PLAYER'] || '';
+    const basePrice = toNum(norm['Base Price'] || norm['Base_Price'] || norm['BasePrice'] || norm['BASE PRICE']);
+    const soldCr = toNum(norm['COST IN ₹ (CR.)'] || norm['COST IN ₹ (CR.)'] || norm['COST IN ₹ (CR)'] || norm['Cost IN ₹ (CR.)'] || norm['COST IN ₹ (CR.)'] || norm['Cost IN ₹ (CR)'] || norm['COST IN ₹ (CR)']);
+    const soldUSD = toNum(norm['Cost IN $ (000)'] || norm['Cost IN $ (000)'] || norm['Cost IN $']);
+    const type = norm['TYPE'] || norm['Type'] || norm['type'] || '';
+    const prev = norm['2021 Squad'] || norm['2021 Squad'] || '';
+    const team = norm['Team'] || norm['team'] || norm['New Team'] || norm['Team Name'] || '';
+    return {
+      raw: norm,
+      Player: player,
+      Base_Price: isNaN(basePrice) ? null : basePrice,
+      Sold_Price_Cr: isNaN(soldCr) ? null : soldCr,
+      Sold_Price_USD: isNaN(soldUSD) ? null : soldUSD,
+      Type: type,
+      Prev_Squad: prev,
+      Team: team
+    };
+  });
+
+  // some basic cleaning: remove entries with no player name
+  window.iplData = window.iplData.filter(d => d.Player && d.Player.length>0);
+
+  // build UI now
+  buildUI();
+}).catch(err => {
+  console.error(err);
+  document.getElementById('playerDetails').innerHTML = '<div style="color:crimson">Error loading CSV. Check console and ensure the path is served.</div>';
+});
+
+// Build UI
+function buildUI(){
+  const data = window.iplData;
+  // compute quick stats
+  const totalPlayers = data.length;
+  const validPrices = data.map(d => d.Sold_Price_Cr).filter(x => x !== null && !isNaN(x));
+  const avgPrice = validPrices.length ? (validPrices.reduce((a,b)=>a+b,0)/validPrices.length) : 0;
+  const totalSpend = validPrices.length ? validPrices.reduce((a,b)=>a+b,0) : 0;
+  document.getElementById('kPlayers').innerText = totalPlayers;
+  document.getElementById('kAvg').innerText = avgPrice ? avgPrice.toFixed(2) : '—';
+  document.getElementById('kTotal').innerText = totalSpend ? totalSpend.toFixed(2) : '—';
+
+  // populate team select
+  const teams = Array.from(new Set(data.map(d => d.Team).filter(Boolean))).sort();
+  const tSel = document.getElementById('teamSelect');
+  teams.forEach(t => {
+    const opt = document.createElement('option'); opt.value = t; opt.innerText = t; tSel.appendChild(opt);
+  });
+
+  // populate player select (all)
+  const pSel = document.getElementById('playerSelect');
+  function setPlayersForTeam(team){
+    // clear
+    pSel.innerHTML = '<option value="">-- choose player --</option>';
+    const players = (team && team !== '__all__') ? data.filter(d => d.Team === team) : data;
+    players.sort((a,b) => (a.Player||'').localeCompare(b.Player||''));
+    players.forEach(p => {
+      const o = document.createElement('option');
+      o.value = p.Player; o.innerText = p.Player;
+      pSel.appendChild(o);
+    });
+  }
+  setPlayersForTeam('__all__');
+
+  // team change handler
+  tSel.addEventListener('change', e => {
+    setPlayersForTeam(e.target.value);
+    // also update charts to filter by team
+    updateChartsAndTables(e.target.value);
+  });
+
+  // player selection handler
+  pSel.addEventListener('change', e => {
+    const name = e.target.value;
+    if(!name) { document.getElementById('playerDetails').innerText = 'Select a player to see details.'; return; }
+    const row = data.find(d => d.Player === name);
+    showPlayer(row);
+  });
+
+  // initial charts and tables
+  updateChartsAndTables('__all__');
+  // top lists
+  renderTopLists();
+}
+
+// Show selected player
+function showPlayer(row) {
+  if(!row) return;
+  const html = `
+    <table>
+      <tr><th>Player</th><td>${escapeHtml(row.Player)}</td></tr>
+      <tr><th>Team</th><td>${escapeHtml(row.Team)}</td></tr>
+      <tr><th>Type</th><td>${escapeHtml(row.Type)}</td></tr>
+      <tr><th>Prev Squad (2021)</th><td>${escapeHtml(row.Prev_Squad)}</td></tr>
+      <tr><th>Base Price</th><td>${row.Base_Price!==null?row.Base_Price+' Cr' : '—'}</td></tr>
+      <tr><th>Sold Price</th><td>${row.Sold_Price_Cr!==null?row.Sold_Price_Cr+' Cr' : '—'}</td></tr>
+      <tr><th>Sold Price (USD 000)</th><td>${row.Sold_Price_USD!==null?row.Sold_Price_USD : '—'}</td></tr>
+    </table>
+  `;
+  document.getElementById('playerDetails').innerHTML = html;
+}
+
+// render top lists: most expensive and vfm
+function renderTopLists(){
+  const data = window.iplData;
+  // most expensive top 10
+  const expensive = data.filter(d => typeof d.Sold_Price_Cr === 'number').sort((a,b)=>b.Sold_Price_Cr - a.Sold_Price_Cr).slice(0,10);
+  const expTable = document.createElement('table');
+  expTable.innerHTML = '<thead><tr><th>Player</th><th>Team</th><th>Sold (₹ Cr)</th></tr></thead>';
+  const expBody = document.createElement('tbody');
+  expensive.forEach(r => {
+    const tr = document.createElement('tr');
+    tr.innerHTML = `<td>${escapeHtml(r.Player)}</td><td>${escapeHtml(r.Team)}</td><td>${r.Sold_Price_Cr!==null?r.Sold_Price_Cr.toFixed(2):'—'}</td>`;
+    expBody.appendChild(tr);
+  });
+  expTable.appendChild(expBody);
+  document.getElementById('topExpensive').innerHTML = ''; document.getElementById('topExpensive').appendChild(expTable);
+
+  // value-for-money (simple metric: performance not available -> use Sold/Base ratio; lower is better)
+  const vfmList = data.map(d => {
+    const base = (typeof d.Base_Price === 'number' && d.Base_Price>0) ? d.Base_Price : 0.001;
+    const sold = (typeof d.Sold_Price_Cr === 'number') ? d.Sold_Price_Cr : Infinity;
+    const vfm = sold / base;
+    return {...d, vfm};
+  }).filter(d => isFinite(d.vfm)).sort((a,b)=>a.vfm - b.vfm).slice(0,10);
+
+  const vfmTable = document.createElement('table');
+  vfmTable.innerHTML = '<thead><tr><th>Player</th><th>Team</th><th>Base (Cr)</th><th>Sold (Cr)</th><th>VfM (Sold/Base)</th></tr></thead>';
+  const vfmBody = document.createElement('tbody');
+  vfmList.forEach(r => {
+    const tr = document.createElement('tr');
+    tr.innerHTML = `<td>${escapeHtml(r.Player)}</td><td>${escapeHtml(r.Team)}</td><td>${r.Base_Price!==null?r.Base_Price.toFixed(2):'—'}</td><td>${r.Sold_Price_Cr!==null?r.Sold_Price_Cr.toFixed(2):'—'}</td><td>${r.vfm!==null?r.vfm.toFixed(2):'—'}</td>`;
+    vfmBody.appendChild(tr);
+  });
+  vfmTable.appendChild(vfmBody);
+  document.getElementById('topVfm').innerHTML = ''; document.getElementById('topVfm').appendChild(vfmTable);
+}
+
+// update charts and tables based on team filter
+function updateChartsAndTables(teamFilter){
+  const data = window.iplData;
+  const filtered = (teamFilter && teamFilter !== '__all__') ? data.filter(d=>d.Team===teamFilter) : data;
+
+  // update KPIs
+  const playersCount = filtered.length;
+  const prices = filtered.map(d=>d.Sold_Price_Cr).filter(x=>typeof x==='number' && !isNaN(x));
+  const avg = prices.length ? (prices.reduce((a,b)=>a+b,0)/prices.length) : 0;
+  const total = prices.length ? prices.reduce((a,b)=>a+b,0) : 0;
+  document.getElementById('kPlayers').innerText = playersCount;
+  document.getElementById('kAvg').innerText = avg?avg.toFixed(2):'—';
+  document.getElementById('kTotal').innerText = total?total.toFixed(2):'—';
+
+  // team spending chart: use all teams (not only filtered) but highlight selected
+  const teamAgg = {};
+  data.forEach(d=>{
+    const team = d.Team || 'Unknown';
+    const val = (typeof d.Sold_Price_Cr==='number' && !isNaN(d.Sold_Price_Cr))? d.Sold_Price_Cr : 0;
+    teamAgg[team] = (teamAgg[team]||0) + val;
+  });
+  const labels = Object.keys(teamAgg).sort((a,b)=>teamAgg[b]-teamAgg[a]);
+  const values = labels.map(l => teamAgg[l]);
+
+  // draw team chart
+  drawBarChart('teamChart', labels, values, teamFilter);
+
+  // histogram of sold prices (filtered)
+  const solds = filtered.map(d => d.Sold_Price_Cr).filter(x => typeof x === 'number' && !isNaN(x));
+  drawHistogram('histCanvas', solds);
+}
+
+// small helper: draw bar chart using Chart.js
+let teamChartInstance = null;
+function drawBarChart(canvasId, labels, values, highlightTeam){
+  const ctx = document.getElementById(canvasId).getContext('2d');
+  if(teamChartInstance) teamChartInstance.destroy();
+  // color highlight
+  const bg = labels.map(l => (l === highlightTeam ? 'rgba(11,108,243,0.9)' : 'rgba(11,108,243,0.5)'));
+  teamChartInstance = new Chart(ctx, {
+    type: 'bar',
+    data: {labels, datasets:[{label:'Total Spent (₹ Cr)',data:values, backgroundColor:bg}]},
+    options:{
+      responsive:true, maintainAspectRatio:false,
+      scales:{y:{beginAtZero:true}}
+    }
+  });
+}
+
+// histogram: draw simple histogram in canvas using Chart.js as bar chart
+let histChartInstance = null;
+function drawHistogram(canvasId, values){
+  const ctx = document.getElementById(canvasId).getContext('2d');
+  if(histChartInstance) histChartInstance.destroy();
+  if(!values || values.length===0){
+    // clear canvas 
+    const cvs = document.getElementById(canvasId);
+    cvs.getContext('2d').clearRect(0,0,cvs.width,cvs.height);
+    return;
+  }
+  // choose number of bins
+  const bins = Math.min(12, Math.ceil(Math.sqrt(values.length)));
+  const min = Math.min(...values), max = Math.max(...values);
+  const binSize = (max - min) / bins || 1;
+  const edges = Array.from({length:bins+1}, (_,i)=>min + i*binSize);
+  const counts = Array.from({length:bins}, ()=>0);
+  values.forEach(v=>{
+    // place in bin
+    let idx = Math.floor((v - min) / binSize);
+    if(idx < 0) idx = 0;
+    if(idx >= bins) idx = bins-1;
+    counts[idx]++;
+  });
+  const labels = edges.slice(0,-1).map((e,i)=> `${e.toFixed(1)} - ${edges[i+1].toFixed(1)}`);
+  histChartInstance = new Chart(ctx, {type:'bar', data:{labels, datasets:[{label:'Count',data:counts,backgroundColor:'rgba(11,108,243,0.6)'}]}, options:{responsive:true,maintainAspectRatio:false,scales:{y:{beginAtZero:true}}}});
+}
+
+// small escape helper
+function escapeHtml(s){ if(s===null || s===undefined) return ''; return String(s).replace(/[&<>"']/g, c=>({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[c])); }
+
+</script>
+</body>
+</html>
